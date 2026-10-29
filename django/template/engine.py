@@ -1,8 +1,10 @@
 import functools
+import warnings
 
 from django.core.exceptions import ImproperlyConfigured
-from django.utils.functional import cached_property
+from django.utils.deprecation import RemovedInDjango2029Warning
 from django.utils.module_loading import import_string
+from django.utils.warnings import django_file_prefixes
 
 from .base import Template
 from .context import Context, _builtin_context_processors
@@ -12,28 +14,39 @@ from .library import import_library
 
 class Engine:
     default_builtins = [
-        'django.template.defaulttags',
-        'django.template.defaultfilters',
-        'django.template.loader_tags',
+        "django.template.defaulttags",
+        "django.template.defaultfilters",
+        "django.template.loader_tags",
     ]
 
-    def __init__(self, dirs=None, app_dirs=False, context_processors=None,
-                 debug=False, loaders=None, string_if_invalid='',
-                 file_charset='utf-8', libraries=None, builtins=None, autoescape=True):
+    def __init__(
+        self,
+        dirs=None,
+        app_dirs=False,
+        context_processors=None,
+        debug=False,
+        loaders=None,
+        string_if_invalid="",
+        file_charset="utf-8",
+        libraries=None,
+        builtins=None,
+        autoescape=True,
+        allow_multiline_tags=None,  # RemovedInDjango2029Warning.
+    ):
         if dirs is None:
             dirs = []
         if context_processors is None:
             context_processors = []
         if loaders is None:
-            loaders = ['django.template.loaders.filesystem.Loader']
+            loaders = ["django.template.loaders.filesystem.Loader"]
             if app_dirs:
-                loaders += ['django.template.loaders.app_directories.Loader']
-            if not debug:
-                loaders = [('django.template.loaders.cached.Loader', loaders)]
+                loaders += ["django.template.loaders.app_directories.Loader"]
+            loaders = [("django.template.loaders.cached.Loader", loaders)]
         else:
             if app_dirs:
                 raise ImproperlyConfigured(
-                    "app_dirs must not be set when loaders is defined.")
+                    "app_dirs must not be set when loaders is defined."
+                )
         if libraries is None:
             libraries = {}
         if builtins is None:
@@ -51,9 +64,42 @@ class Engine:
         self.template_libraries = self.get_template_libraries(libraries)
         self.builtins = self.default_builtins + builtins
         self.template_builtins = self.get_template_builtins(self.builtins)
+        # RemovedInDjango2029Warning.
+        if allow_multiline_tags is not None:
+            warnings.warn(
+                "The 'allow_multiline_tags' transitional template engine "
+                "option is deprecated.",
+                RemovedInDjango2029Warning,
+                skip_file_prefixes=django_file_prefixes(),
+            )
+        else:
+            allow_multiline_tags = True
+        self.allow_multiline_tags = allow_multiline_tags
+
+    def __repr__(self):
+        return (
+            "<%s:%s app_dirs=%s%s debug=%s loaders=%s string_if_invalid=%s "
+            "file_charset=%s%s%s autoescape=%s>"
+        ) % (
+            self.__class__.__qualname__,
+            "" if not self.dirs else " dirs=%s" % repr(self.dirs),
+            self.app_dirs,
+            (
+                ""
+                if not self.context_processors
+                else " context_processors=%s" % repr(self.context_processors)
+            ),
+            self.debug,
+            repr(self.loaders),
+            repr(self.string_if_invalid),
+            repr(self.file_charset),
+            "" if not self.libraries else " libraries=%s" % repr(self.libraries),
+            "" if not self.builtins else " builtins=%s" % repr(self.builtins),
+            repr(self.autoescape),
+        )
 
     @staticmethod
-    @functools.lru_cache()
+    @functools.lru_cache
     def get_default():
         """
         Return the first DjangoTemplates backend that's configured, or raise
@@ -73,12 +119,13 @@ class Engine:
         # local imports are required to avoid import loops.
         from django.template import engines
         from django.template.backends.django import DjangoTemplates
+
         for engine in engines.all():
             if isinstance(engine, DjangoTemplates):
                 return engine.engine
-        raise ImproperlyConfigured('No DjangoTemplates backend is configured.')
+        raise ImproperlyConfigured("No DjangoTemplates backend is configured.")
 
-    @cached_property
+    @functools.cached_property
     def template_context_processors(self):
         context_processors = _builtin_context_processors
         context_processors += tuple(self.context_processors)
@@ -93,7 +140,7 @@ class Engine:
             loaded[name] = import_library(path)
         return loaded
 
-    @cached_property
+    @functools.cached_property
     def template_loaders(self):
         return self.get_template_loaders(self.loaders)
 
@@ -116,7 +163,8 @@ class Engine:
             return loader_class(self, *args)
         else:
             raise ImproperlyConfigured(
-                "Invalid value in template loaders configuration: %r" % loader)
+                "Invalid value in template loaders configuration: %r" % loader
+            )
 
     def find_template(self, name, dirs=None, skip=None):
         tried = []
@@ -140,11 +188,31 @@ class Engine:
         Return a compiled Template object for the given template name,
         handling template inheritance recursively.
         """
+        original_name = template_name
+        try:
+            template_name, _, partial_name = template_name.partition("#")
+        except AttributeError:
+            raise TemplateDoesNotExist(original_name)
+
+        if not template_name:
+            raise TemplateDoesNotExist(original_name)
+
         template, origin = self.find_template(template_name)
-        if not hasattr(template, 'render'):
+        if not hasattr(template, "render"):
             # template needs to be compiled
             template = Template(template, origin, template_name, engine=self)
-        return template
+
+        if not partial_name:
+            return template
+
+        extra_data = getattr(template, "extra_data", {})
+        try:
+            partial = extra_data["partials"][partial_name]
+        except (KeyError, TypeError):
+            raise TemplateDoesNotExist(partial_name, tried=[template_name])
+        partial.engine = self
+
+        return partial
 
     def render_to_string(self, template_name, context=None):
         """
@@ -177,4 +245,4 @@ class Engine:
                     not_found.append(exc.args[0])
                 continue
         # If we get here, none of the templates could be loaded
-        raise TemplateDoesNotExist(', '.join(not_found))
+        raise TemplateDoesNotExist(", ".join(not_found))

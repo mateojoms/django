@@ -34,6 +34,10 @@ if "%1" == "help" (
 	echo.  changes    to make an overview over all changed/added/deprecated items
 	echo.  linkcheck  to check all external links for integrity
 	echo.  doctest    to run all doctests embedded in the documentation if enabled
+	echo.  spelling   to check for typos in documentation
+	echo.  black      to apply the black formatting to code blocks in documentation
+	echo.  lint       to check for linting errors in documentation
+	echo.  epubcheck  to validate the epub build with EPUBCheck
 	goto end
 )
 
@@ -44,7 +48,7 @@ if "%1" == "clean" (
 )
 
 if "%1" == "html" (
-	%SPHINXBUILD% -b djangohtml %ALLSPHINXOPTS% %BUILDDIR%/html
+	%SPHINXBUILD% -b html %ALLSPHINXOPTS% %BUILDDIR%/html
 	if errorlevel 1 exit /b 1
 	echo.
 	echo.Build finished. The HTML pages are in %BUILDDIR%/html.
@@ -113,10 +117,8 @@ if "%1" == "devhelp" (
 )
 
 if "%1" == "epub" (
-	%SPHINXBUILD% -b epub %ALLSPHINXOPTS% %BUILDDIR%/epub
+	call :run_epub
 	if errorlevel 1 exit /b 1
-	echo.
-	echo.Build finished. The epub file is in %BUILDDIR%/epub.
 	goto end
 )
 
@@ -185,5 +187,67 @@ if "%1" == "doctest" (
 results in %BUILDDIR%/doctest/output.txt.
 	goto end
 )
+
+if "%1" == "epubcheck" (
+	call :run_epub
+	if errorlevel 1 exit /b 1
+	python -m epubcheck %BUILDDIR%/epub/Django.epub
+	if errorlevel 1 exit /b 1
+	echo.
+	echo.EPUBCheck complete.
+	goto end
+)
+
+if "%1" == "spelling" (
+	call :run_spelling
+	goto end
+)
+
+if "%1" == "black" (
+	call :run_black
+	goto end
+)
+
+if "%1" == "lint" (
+	call :run_lint
+	goto end
+)
+
+if "%1" == "check" (
+	call :run_lint
+	call :run_black
+	call :run_spelling
+	echo.
+	echo.All checks completed.
+	goto end
+)
+
+:run_epub
+	%SPHINXBUILD% -b epub %ALLSPHINXOPTS% %BUILDDIR%/epub
+	if errorlevel 1 exit /b 1
+	echo.
+	echo.Build finished. The epub file is in %BUILDDIR%/epub.
+	exit /b
+
+:run_spelling
+	%SPHINXBUILD% -b spelling %ALLSPHINXOPTS% %BUILDDIR%/spelling
+	if errorlevel 1 exit /b 1
+	echo.
+	echo.Check finished. Wrong words can be found in %BUILDDIR%/spelling/output.txt.
+	exit /b
+
+:run_black
+	for /f "usebackq tokens=*" %%i in (`dir *.txt /s /b ^| findstr /v /c:"_build" /c:"_ext" /c:"_static" /c:"_theme" /c:"requirements.txt"`) do (
+		blacken-docs --rst-literal-block %%i
+	)
+	echo.
+	echo.Code blocks reformatted
+	exit /b
+
+:run_lint
+	python lint.py
+	if errorlevel 1 exit /b 1
+	echo.
+	echo.Documentation lint complete.
 
 :end

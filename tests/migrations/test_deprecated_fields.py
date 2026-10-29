@@ -1,14 +1,17 @@
 from django.core.management import call_command
 from django.test import override_settings
 
-from .test_base import MigrationTestBase
+from .base import MigrationTestBase
 
 
 class Tests(MigrationTestBase):
     """
     Deprecated model fields should still be usable in historic migrations.
     """
-    @override_settings(MIGRATION_MODULES={"migrations": "migrations.deprecated_field_migrations"})
+
+    @override_settings(
+        MIGRATION_MODULES={"migrations": "migrations.deprecated_field_migrations"}
+    )
     def test_migrate(self):
         # Make sure no tables are created
         self.assertTableNotExists("migrations_ipaddressfield")

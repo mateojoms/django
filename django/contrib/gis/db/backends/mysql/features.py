@@ -1,11 +1,11 @@
+from functools import cached_property
+
 from django.contrib.gis.db.backends.base.features import BaseSpatialFeatures
-from django.db.backends.mysql.features import (
-    DatabaseFeatures as MySQLDatabaseFeatures,
-)
-from django.utils.functional import cached_property
+from django.db.backends.mysql.features import DatabaseFeatures as MySQLDatabaseFeatures
 
 
 class DatabaseFeatures(BaseSpatialFeatures, MySQLDatabaseFeatures):
+    empty_intersection_returns_none = False
     has_spatialrefsys_table = False
     supports_add_srs_entry = False
     supports_distance_geodetic = False
@@ -16,10 +16,27 @@ class DatabaseFeatures(BaseSpatialFeatures, MySQLDatabaseFeatures):
     supports_num_points_poly = False
 
     @cached_property
-    def supports_empty_geometry_collection(self):
-        return self.connection.mysql_version >= (5, 7, 5)
+    def unsupported_geojson_options(self):
+        if self.connection.mysql_is_mariadb or self.connection.mysql_version < (9, 5):
+            return {"crs"}
+        return set()
 
     @cached_property
     def supports_geometry_field_unique_index(self):
-        # Not supported in MySQL since https://dev.mysql.com/worklog/task/?id=11808
+        # Not supported in MySQL since
+        # https://dev.mysql.com/worklog/task/?id=11808
         return self.connection.mysql_is_mariadb
+
+    @cached_property
+    def django_test_skips(self):
+        skips = super().django_test_skips
+        if self.connection.mysql_is_mariadb:
+            skips.update(
+                {
+                    "MariaDB doesn't support nested geometry collections.": {
+                        "gis_tests.geoapp.tests.SaveLoadTests."
+                        "test_geometrycollectionfield_default_max_ignored_on_read",
+                    },
+                }
+            )
+        return skips

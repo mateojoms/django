@@ -1,27 +1,52 @@
 import copy
 import os
+import sys
+import types
 from importlib import import_module
 from importlib.util import find_spec as importlib_find
 
 
+def cached_import(module_path):
+    # Check whether module is loaded and fully initialized.
+    if not (
+        (module := sys.modules.get(module_path))
+        and (spec := getattr(module, "__spec__", None))
+        and getattr(spec, "_initializing", False) is False
+    ):
+        module = import_module(module_path)
+    return module
+
+
 def import_string(dotted_path):
     """
-    Import a dotted module path and return the attribute/class designated by the
-    last name in the path. Raise ImportError if the import failed.
+    Import a dotted module path and return the module or attribute/class
+    designated by the path. Raise ImportError if the import failed.
     """
-    try:
-        module_path, class_name = dotted_path.rsplit('.', 1)
-    except ValueError as err:
-        raise ImportError("%s doesn't look like a module path" % dotted_path) from err
+    if "." not in dotted_path:
+        return cached_import(dotted_path)
+    else:
+        # Force a consistent state by eagerly importing the entire dotted path.
+        try:
+            cached_import(dotted_path)
+        except ImportError:
+            pass
 
-    module = import_module(module_path)
+        module_path, class_name = dotted_path.rsplit(".", 1)
+        module = cached_import(module_path)
 
-    try:
-        return getattr(module, class_name)
-    except AttributeError as err:
-        raise ImportError('Module "%s" does not define a "%s" attribute/class' % (
-            module_path, class_name)
-        ) from err
+        # Attempt getattr first, which will return any named objects
+        # in a loaded module or a previously loaded submodule.
+        try:
+            import_target = getattr(module, class_name)
+        except AttributeError:
+            try:
+                import_target = cached_import(dotted_path)
+            except ImportError as err:
+                raise ImportError(
+                    'Module "%s" does not define a "%s" attribute/class'
+                    % (module_path, class_name)
+                ) from err
+        return import_target
 
 
 def autodiscover_modules(*args, **kwargs):
@@ -36,7 +61,7 @@ def autodiscover_modules(*args, **kwargs):
     """
     from django.apps import apps
 
-    register_to = kwargs.get('register_to')
+    register_to = kwargs.get("register_to")
     for app_config in apps.get_app_configs():
         for module_to_search in args:
             # Attempt to import the app's module.
@@ -44,7 +69,7 @@ def autodiscover_modules(*args, **kwargs):
                 if register_to:
                     before_import_registry = copy.copy(register_to._registry)
 
-                import_module('%s.%s' % (app_config.name, module_to_search))
+                import_module("%s.%s" % (app_config.name, module_to_search))
             except Exception:
                 # Reset the registry to the state before the last import
                 # as this import will have to reoccur on the next request and
@@ -69,13 +94,12 @@ def module_has_submodule(package, module_name):
         # package isn't a package.
         return False
 
-    full_module_name = package_name + '.' + module_name
+    full_module_name = package_name + "." + module_name
     try:
         return importlib_find(full_module_name, package_path) is not None
-    except (ModuleNotFoundError, AttributeError):
+    except ModuleNotFoundError:
         # When module_name is an invalid dotted path, Python raises
-        # ModuleNotFoundError. AttributeError is raised on PY36 (fixed in PY37)
-        # if the penultimate part of the path is not a package.
+        # ModuleNotFoundError.
         return False
 
 
@@ -86,12 +110,31 @@ def module_dir(module):
     Raise ValueError otherwise, e.g. for namespace packages that are split
     over several directories.
     """
-    # Convert to list because _NamespacePath does not support indexing.
-    paths = list(getattr(module, '__path__', []))
+    # Convert to list because __path__ may not support indexing.
+    paths = list(getattr(module, "__path__", []))
     if len(paths) == 1:
         return paths[0]
     else:
-        filename = getattr(module, '__file__', None)
+        filename = getattr(module, "__file__", None)
         if filename is not None:
             return os.path.dirname(filename)
     raise ValueError("Cannot determine directory containing %s" % module)
+
+
+def qualname(value):
+    """
+    Return the fully qualified name (dotted module path) for a class, function,
+    type, or module (e.g. 'django.db.models.Model').
+    """
+    if isinstance(value, types.ModuleType):
+        return value.__name__
+    if not hasattr(value, "__module__") or value.__module__ is None:
+        msg = f"Cannot determine module path for {value!r}: no __module__ attribute."
+        raise ValueError(msg)
+    if not hasattr(value, "__qualname__"):
+        msg = f"Cannot determine module path for {value!r}: no __qualname__ attribute."
+        raise ValueError(msg)
+    if "<" in value.__qualname__:
+        msg = f"Cannot determine module path for {value!r}: local or anonymous object."
+        raise ValueError(msg)
+    return f"{value.__module__}.{value.__qualname__}"
